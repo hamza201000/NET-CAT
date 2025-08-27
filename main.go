@@ -128,6 +128,7 @@ func to_chat() {
 					if err != nil {
 						continue
 					}
+					join = false
 				} else {
 					_, err := user.Write([]byte("\n" + data.user + data.message))
 					if err != nil {
@@ -135,8 +136,8 @@ func to_chat() {
 					}
 				}
 			} else if add == data.user_conn {
-				if new_user != "" && join {
-					for _, mesg := range chat_history {
+				if new_user != "" && len(data.chat_history) != 0 {
+					for _, mesg := range data.chat_history {
 						_, err := user.Write([]byte(mesg))
 						if err != nil {
 							continue
