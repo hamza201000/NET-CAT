@@ -5,13 +5,28 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"time"
 )
 
-type User struct {
-	name    string
-	message string
+type data_user struct {
+	user         string
+	message      string
+	user_conn    string
+	name         string
+	chat_history []string
 }
+
+var (
+	data_message = make(chan data_user)
+	clients      = make(map[string]net.Conn)
+	mutex        sync.Mutex
+	new_user     string
+
+	chat_history []string
+
+	join bool
+)
 
 func main() {
 	listener, err := net.Listen("tcp", ":8080")
@@ -20,12 +35,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer listener.Close()
+	go to_chat()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			fmt.Println("Error accepting connection:", err)
 			continue
 		}
+		mutex.Lock()
+		clients[conn.RemoteAddr().String()] = conn
+		mutex.Unlock()
 		go handleConnection(conn)
 	}
 }
@@ -56,25 +75,83 @@ func handleConnection(conn net.Conn) {
 		fmt.Println("No name entered by client")
 		return
 	}
-	user := "[" + scanner.Text() + "]" + ":"
+	name_user := scanner.Text()
+	join = true
+	new_user = name_user
+	user := "[" + name_user + "]" + ":"
+
 	fmt.Print("User set to:", user)
 	currentTime := time.Now().Format("[2006-01-02 15:04:05]")
-	conn.Write([]byte(currentTime))
-	conn.Write([]byte(user))
-	data_user := make(chan string, 10)
-	for scanner.Scan() {
+	for name_user == "" {
 
-		message := scanner.Text()
-		data_user <- user + message
-		fmt.Println(user, message)
-		msg := <-data_user
-		conn.Write([]byte(currentTime))
-		_, err := conn.Write([]byte(msg))
+		_, err := conn.Write([]byte("[YOU HAVE TO ENTER YOUR NAME TO START CHAT]:"))
 		if err != nil {
-			fmt.Println("Error sending response:", err)
+			fmt.Println("Error sending name", err)
 			return
 		}
+		if !scanner.Scan() {
+			fmt.Println("No name entered by client")
+			return
+		}
+		name_user = scanner.Text()
+		new_user = name_user
+		user = "[" + name_user + "]" + ":"
+
+		fmt.Print("User set to:", user)
+	}
+	data := data_user{user: currentTime + user, user_conn: conn.RemoteAddr().String(), name: name_user}
+
+	data_message <- data
+	for scanner.Scan() {
+		mutex.Lock()
+		message := scanner.Text()
+		if !join {
+			chat_history = append(chat_history, data.user, data.message+"\n")
+		}
+		data = data_user{user: currentTime + user, message: message, user_conn: conn.RemoteAddr().String(), chat_history: chat_history}
+
+		data_message <- data
+		mutex.Unlock()
+		// fmt.Println(user, message)
 	}
 
 	fmt.Println("Client disconnected:", conn.RemoteAddr())
+}
+
+func to_chat() {
+	for data := range data_message {
+		mutex.Lock()
+		for add, user := range clients {
+			if add != data.user_conn {
+				if new_user != "" && join {
+					_, err := user.Write([]byte("\n" + new_user + " has joined our chat..."))
+					if err != nil {
+						continue
+					}
+				} else {
+					_, err := user.Write([]byte("\n" + data.user + data.message))
+					if err != nil {
+						continue
+					}
+				}
+			} else if add == data.user_conn {
+				if new_user != "" && join {
+					for _, mesg := range chat_history {
+						_, err := user.Write([]byte(mesg))
+						if err != nil {
+							continue
+						}
+					}
+					new_user = ""
+					join = false
+				} else {
+					_, err := user.Write([]byte(data.user))
+					if err != nil {
+						continue
+					}
+				}
+			}
+		}
+		mutex.Unlock()
+	}
 }
